@@ -11,7 +11,7 @@ print(python_version())
 # In[2]:
 
 
-cvid_url='https://data.humdata.org/hxlproxy/api/data-preview.csv?url=https%3A%2F%2Fraw.githubusercontent.com%2Fnytimes%2Fcovid-19-data%2Fmaster%2Fus-counties.csv&filename=us-counties.csv'
+cvid_url='https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv'
 cvid_file='us-counties.csv'
 
 aqi_url='https://aqs.epa.gov/aqsweb/airdata/daily_aqi_by_county_2020.zip'
