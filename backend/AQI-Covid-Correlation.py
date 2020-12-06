@@ -20,28 +20,42 @@ aqi_file='daily_aqi_by_county_2020.csv'
 # thresh_pcntg = 0.6 # drop parameter if fraction of null is less than this fraction
 
 
-# ## Download data
-
 # In[3]:
 
 
-import requests
-r=requests.get(aqi_url)
-with open(aqi_zip,'wb+') as f:
-    f.write(r.content) 
+incubationPeriod=5
 
-r=requests.get(cvid_url)
-with open(cvid_file,'wb+') as f:
-    f.write(r.content)
 
-import zipfile
-with zipfile.ZipFile(aqi_zip, 'r') as zip_ref:
-    zip_ref.extractall('./')
+# ## Download data
+
+# In[4]:
+
+
+import requests, zipfile
+
+try:
+    r=requests.get(aqi_url)
+    with open(aqi_zip,'wb+') as f:
+        f.write(r.content) 
+
+except:
+    print(f"Couldn't get aqi data from {aqi_url}")
+
+
+    
+try:
+    r=requests.get(cvid_url)
+    with open(cvid_file,'wb+') as f:
+        f.write(r.content)
+    with zipfile.ZipFile(aqi_zip, 'r') as zip_ref:
+        zip_ref.extractall('./')
+except:
+    print(f"Couldn't get cvid data from {cvid_url}")
 
 
 # ## Read Covid-19 data for US
 
-# In[4]:
+# In[5]:
 
 
 import pandas as pd
@@ -53,7 +67,7 @@ cvidCounties = cvid.county.unique().tolist()
 
 # ## Read AQI data
 
-# In[8]:
+# In[6]:
 
 
 aqi=pd.read_csv(aqi_file)
@@ -65,7 +79,7 @@ aqi=aqi.drop(columns=['State Code', 'County Code', 'Category', 'Number of Sites 
 
 # ## Consider Counties which have both Covid data and AQI info available
 
-# In[9]:
+# In[7]:
 
 
 commonCounties=set(aqiCounties).intersection(cvidCounties)
@@ -74,7 +88,7 @@ len(commonCounties)
 
 # ## Keep rows with Counties from Common Counties only
 
-# In[10]:
+# In[8]:
 
 
 cvid=cvid[cvid.county.isin(commonCounties)]
@@ -83,13 +97,13 @@ aqi=aqi[aqi.City.isin(commonCounties)]
 
 # ## Sync Dates (i.e. keep common dates only)
 
-# In[11]:
+# In[9]:
 
 
 min(cvid.date), max(cvid.date), min(aqi.Date), max(aqi.Date)
 
 
-# In[13]:
+# In[10]:
 
 
 startdate=max(min(cvid.date), min(aqi.Date))
@@ -97,7 +111,7 @@ enddate=min(max(cvid.date), max(aqi.Date))
 startdate, enddate
 
 
-# In[14]:
+# In[11]:
 
 
 cvid=cvid[cvid.date.between(startdate, enddate, inclusive=True)]
@@ -109,7 +123,7 @@ aqi=aqi[aqi.Date.between(startdate, enddate, inclusive=True)]
 # 
 # ## FillNa Method
 
-# In[43]:
+# In[14]:
 
 
 cvidByCounty={county:df for county, df in cvid.groupby('county')}
@@ -147,6 +161,8 @@ for county, cvidCounty in cvidByCounty.items():
     
     cvid_aqiByCounty[county]=aqiByCounty[county].copy()
     cvid_aqiByCounty[county]['cases']=cvidByCounty[county]['cases'].tolist()
+    cvid_aqiByCounty[county]['cases']=cvid_aqiByCounty[county]['cases'].shift(incubationPeriod)
+    cvid_aqiByCounty[county]=cvid_aqiByCounty[county].iloc[incubationPeriod:]
     
     
 #     cvid_aqiByCounty[county]=cvid_aqiByCounty[county].fillna(cvid_aqiByCounty[county].mean())
@@ -156,7 +172,10 @@ for county, cvidCounty in cvidByCounty.items():
     if not len(cvid_aqiByCounty[county]):
         cvid_aqiByCounty.pop(county)
         continue
-        
+
+    cvid_aqiByCounty[county]=cvid_aqiByCounty[county].sort_values(['Date'])
+    temp=pd.Series([0] + cvid_aqiByCounty[county].cases.tolist()[:-1]).to_numpy()
+    cvid_aqiByCounty[county].cases=cvid_aqiByCounty[county].cases.to_numpy() - temp
     print(county, len(cvidByCounty[county]), len(aqiByCounty[county]), len(cvid_aqiByCounty[county]))
     
     print(cvid_aqiByCounty[county].isna().sum())
@@ -165,12 +184,15 @@ for county, cvidCounty in cvidByCounty.items():
 # ## Concatenate all County data
 # ## FillNa
 
-# In[44]:
+# In[16]:
 
 
 df=pd.concat(list(cvid_aqiByCounty.values()))
 # df=df.sample(frac=0.7)
-df.fillna(df.mean(), inplace=True)
+# df.fillna(df.mean(), inplace=True)
+
+df['AQI']=df[['Ozone', 'PM10', 'SO2', 'PM2.5', 'NO2']].max(axis=1)
+df['cases']=df['cases']
 df.isnull().sum()
 len(df)
 
@@ -191,7 +213,7 @@ model=LinearRegression()
 # In[18]:
 
 
-X, y = df.drop(columns=['cases', 'Date']), df.cases
+X, y = df[['AQI']], df.cases
 y=y.to_numpy().reshape(-1, 1)
 
 
@@ -202,18 +224,17 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
 
 
-# In[20]:
+# In[21]:
 
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=42)
 
 poly=PolynomialFeatures(2)
-scaler=MinMaxScaler()
 X_train=poly.fit_transform(X_train)
 X_test = poly.transform(X_test)
 
 
-# In[21]:
+# In[22]:
 
 
 model.fit(X_train, y_train)
@@ -221,25 +242,89 @@ y_pred=model.predict(X_test)
 print(r2_score(y_test, y_pred), mean_squared_error(y_test, y_pred))
 
 
-# In[22]:
+# ## Save Predictions
+
+# In[23]:
+
+
+import numpy as np
+df['risk_predicted']=MinMaxScaler().fit_transform(np.log10(model.predict(poly.transform(X)+1)))
+df[['cases', 'AQI', 'risk_predicted']].to_csv('validation.csv')
+
+
+# ## Save Regressor
+
+# In[24]:
 
 
 import pickle
 
 filename = 'regression_model.sav'
-pickle.dump(model, open(filename, 'wb'))
+pickle.dump(model, open(filename, 'wb+'))
+
+
+# ## Predict and Save
+
+# In[25]:
+
+
+predictor=pickle.load(open(filename, 'rb'))
+
+
+# In[27]:
+
+
+import curr_aqi, time
+
+loc_list = list(cvid_aqiByCounty.keys())
+APIDF = curr_aqi.show_aqi(loc_list)
+APIDF
 
 
 # In[28]:
 
 
-cvid_aqiByCounty['ada'].drop(columns=['Date']).corr()
+params=list(set(['Ozone', 'PM10', 'SO2', 'PM2.5', 'NO2']).intersection(APIDF.columns))
+
+APIDF['AQI']=APIDF[params].max(axis=1)
+APIDF=APIDF[~APIDF['AQI'].isna()]
+resultX=APIDF['AQI'].to_numpy().reshape(-1, 1)
+APIDF['risk_predicted']=MinMaxScaler().fit_transform(np.log10(predictor.predict(poly.transform(resultX)+1)))
 
 
-# In[46]:
+# ## Generate color
+
+# In[56]:
 
 
-cvid_aqiByCounty['hanover'].corr()
+# import colorsys
+
+# def get_color(val):
+#     # suyash code the logic
+#     return "colorhexcode"
+
+
+# In[57]:
+
+
+# APIDF['color']=APIDF['risk_predicted'].apply(lambda x: get_color(x))
+
+
+# ## Save as sqlite3
+
+# In[58]:
+
+
+import sqlite3
+cnx = sqlite3.connect('results.db')
+APIDF.to_sql(name='main', con=cnx, if_exists='replace')
+cnx.close()
+
+
+# In[59]:
+
+
+APIDF
 
 
 # In[ ]:
